@@ -1,0 +1,1218 @@
+<!doctype html>
+<html lang="en" translate="no" class="notranslate">
+<head>
+<meta charset="utf-8">
+<meta name="google" content="notranslate">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NuCPuC – Beunis (2021)</title>
+<meta name="description" content="Interactive web version of the NuCPuC simulation (R. Beunis, 2021): formation of privileged partner connections between Purkinje cells and cerebellar nuclear cells.">
+<!--
+  NuCPuC - web version (HTML/JavaScript) of nucpuc.prg (Dr. R. Beunis, Visual FoxPro 9.0, 2019-2021),
+  via the Python translation nucpuc.py.  One self-contained file, no external libraries.
+
+  Article: Beunis R. (2021) Olivo-Cerebello-Nucleo-Olivary Loops Connectivity might be refined
+  during the juvenile multi-innervation Phase of Climbing Fibers onto Purkinje Cells.
+  Zenodo, doi:10.5281/zenodo.17575573
+
+  URL parameters:  ?demo=1..9   ?speed=0.25|0.5|0.75|1|1.5|2   ?seed=N (reproducible run)
+-->
+<style>
+  html, body { margin: 0; height: 100%; background: #808080; overflow: hidden; }
+  #stage { position: absolute; left: 0; top: 0; width: 800px; height: 540px; transform-origin: 0 0; overflow: hidden;
+           font-family: Arial, Helvetica, "Liberation Sans", sans-serif; font-weight: bold; }
+  #cv { position: absolute; left: 0; top: 0; }
+  .ctl { position: absolute; box-sizing: border-box; margin: 0; padding: 0; overflow: hidden; font-weight: bold; }
+  .btn { background: #e1e1e1; border: 1px solid #adadad; color: #000; font-family: inherit; font-weight: bold;
+         display: flex; align-items: center; justify-content: center; text-align: center;
+         white-space: pre-wrap; line-height: 1.1; cursor: default; padding: 0 1px; }
+  .btn:hover:not(:disabled) { background: #e5f1fb; border-color: #0078d7; }
+  .btn:disabled { color: #a0a0a0; }
+  .lbl { border-style: solid; text-align: center; white-space: pre-wrap; line-height: 1.15; padding-top: 1px;
+         cursor: default; user-select: none; -webkit-user-select: none; }
+  .lbl.nowrap { white-space: pre; }
+  .lbl.mid { display: flex; align-items: center; justify-content: center; padding-top: 0; line-height: 1; }
+  .spin { border: 1px solid #7a7a7a; background: #fff; }
+  .spin input { position: absolute; left: 0; top: 0; bottom: 0; right: 17px; width: auto; border: 0; outline: 0;
+                text-align: right; font: bold 9px Arial, Helvetica, sans-serif; padding: 0 2px; background: #fff; }
+  .spin input:disabled { background: #f0f0f0; color: #a0a0a0; }
+  .spin button { position: absolute; right: 0; width: 16px; height: 50%; border: 1px solid #adadad; background: #e1e1e1;
+                 font-size: 6px; line-height: 1; padding: 0; cursor: default; }
+  .spin button.up { top: 0; } .spin button.dn { bottom: 0; }
+  .spin button:disabled { color: #b0b0b0; }
+  textarea.ctl { background: #fff; border: 1px solid #7a7a7a; resize: none; font: bold 9px "Courier New", Courier, monospace; }
+  .panel { background: #e1e1e1; border: 1px solid #adadad; font-family: inherit; font-weight: bold; font-size: 9px;
+           white-space: pre-wrap; text-align: center; line-height: 1.25; cursor: pointer; padding: 0 2px; }
+  .panel:hover { background: #e5f1fb; border-color: #0078d7; }
+  .panel.on { background: #ffff00; border: 2px solid #000; }
+  .speedlbl { color: #fff; font-size: 9px; text-align: left; }
+  /* touch screens: no text selection or callout menu on a long press; tooltips via press-and-hold */
+  body { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
+  input { -webkit-user-select: text; user-select: text; }
+  #stage { touch-action: manipulation; }
+  #tip { position: fixed; z-index: 1000; display: none; max-width: 300px; padding: 6px 8px;
+         background: #ffffe1; border: 1px solid #000; box-shadow: 2px 2px 6px rgba(0,0,0,.4);
+         font: 13px Arial, Helvetica, sans-serif; color: #000; white-space: pre-wrap; pointer-events: none; }
+</style>
+</head>
+<body>
+<div id="stage"></div>
+<script>
+"use strict";
+
+// ---------------------------------------------------------------------------------------------
+// Colours (PROCEDURE INITCOLOR) as 0xRRGGBB
+// ---------------------------------------------------------------------------------------------
+const pnZwart = 0x000000, pnGrijs = 0x808080, pnWit = 0xFFFFFF, pnRood = 0xFF0000,
+      pnGroen = 0x00FF00, pnBlauw = 0x0000FF, pnGeel = 0xFFFF00, LABEL_BACK = 0xF0F0F0;
+const pcLF = "\n";
+const FORM_W = 1264, FORM_H = 540;          // VFP form size of the screenshots in the article
+const VIEW_W = 800;                          // visible width: network (up to x = ±620) + demo panel
+const DEMO_PANEL_W = 160;
+
+const css = c => "#" + c.toString(16).padStart(6, "0");
+const u32 = c => (0xFF000000 | ((c & 0xFF) << 16) | (c & 0xFF00) | ((c >> 16) & 0xFF)) >>> 0;
+const FONTS = { "Arial": 'Arial, Helvetica, "Liberation Sans", sans-serif',
+                "Courier New": '"Courier New", Courier, "Liberation Mono", monospace' };
+const PX = pt => Math.round(pt * 96 / 72);   // MulDiv(pt, 96, 72)
+
+// ---------------------------------------------------------------------------------------------
+// VFP helper functions
+// ---------------------------------------------------------------------------------------------
+const EPS = 1e-9;
+const ge = (a, b) => a > b - EPS;
+const lt = (a, b) => a < b - EPS;
+const eq = (a, b) => Math.abs(a - b) < EPS;
+const INT = x => x >= 0 ? Math.trunc(x + EPS) : -Math.trunc(-x + EPS);
+const r10 = x => Math.round(x * 1e10) / 1e10;
+const AT = (s, t) => s ? t.indexOf(s) + 1 : 0;
+const SUBSTR = (s, start, n) => { let i = Math.max(0, Math.trunc(start) - 1); return n === undefined ? s.slice(i) : s.substr(i, n); };
+const STUFF = (s, pos, n, rep) => s.slice(0, pos - 1) + rep + s.slice(pos - 1 + n);
+const VAL = s => { const m = /^\s*(\d+)/.exec(s); return m ? parseInt(m[1], 10) : 0; };
+const LTSTR = n => String(Math.round(n));
+const STREXTRACT = (s, delim, n) => { const p = s.split(delim); return n < p.length ? p[n] : ""; };
+function STR(n, len = 10, dec = 0) {
+  // VFP STR(): right-aligned, decimals dropped when it does not fit; decimal separator ','
+  for (let d = dec; d >= 0; d--) {
+    const s = n.toFixed(d);
+    if (s.length <= len) return s.padStart(len).replace(".", ",");
+  }
+  return "*".repeat(len);
+}
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const chan = new MessageChannel(), chanQ = [];
+chan.port1.onmessage = () => { const r = chanQ.shift(); if (r) r(); };
+const yieldNow = () => new Promise(r => { chanQ.push(r); chan.port2.postMessage(0); });
+
+function mulberry32(a) {
+  return function () {
+    a |= 0; a = a + 0x6D2B79F5 | 0;
+    let t = Math.imul(a ^ a >>> 15, 1 | a);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+
+// ---------------------------------------------------------------------------------------------
+// Form graphics: VFP Form.Line/Circle/Box/Print/Cls on a pixel buffer (without anti-aliasing)
+// ---------------------------------------------------------------------------------------------
+class FormGraphics {
+  constructor(W, H, back) {
+    this.W = W; this.H = H; this.BackColor = back;
+    this.img = new ImageData(W, H);
+    this.buf = new Uint32Array(this.img.data.buffer);
+    this.ForeColor = pnZwart; this.FillColor = pnZwart; this.FillStyle = 1; this.DrawWidth = 1;
+    this.FontSize = 8; this.FontName = "Arial";
+    this.tc = document.createElement("canvas");
+    this.tctx = this.tc.getContext("2d", { willReadFrequently: true });
+    this.cache = new Map();
+    this.Cls();
+  }
+  Cls() { this.buf.fill(u32(this.BackColor)); this.dirty = true; }
+  span(y, x0, x1, c) {
+    if (y < 0 || y >= this.H) return;
+    if (x0 < 0) x0 = 0; if (x1 > this.W - 1) x1 = this.W - 1;
+    if (x0 > x1) return;
+    const o = y * this.W; this.buf.fill(c, o + x0, o + x1 + 1);
+  }
+  px(x, y, c) { if (x >= 0 && y >= 0 && x < this.W && y < this.H) this.buf[y * this.W + x] = c; }
+  Line(x1, y1, x2, y2) {
+    const w = Math.max(1, this.DrawWidth | 0), c = u32(this.ForeColor);
+    x1 = Math.round(x1); y1 = Math.round(y1); x2 = Math.round(x2); y2 = Math.round(y2);
+    if (w <= 1) {   // Bresenham
+      let dx = Math.abs(x2 - x1), sx = x1 < x2 ? 1 : -1, dy = -Math.abs(y2 - y1), sy = y1 < y2 ? 1 : -1, err = dx + dy;
+      for (;;) {
+        this.px(x1, y1, c);
+        if (x1 === x2 && y1 === y2) break;
+        const e2 = 2 * err;
+        if (e2 >= dy) { err += dy; x1 += sx; }
+        if (e2 <= dx) { err += dx; y1 += sy; }
+      }
+    } else {        // thick line with round end caps (GDI pen)
+      const r = w / 2, dx = x2 - x1, dy = y2 - y1, len = Math.hypot(dx, dy);
+      let poly = null;
+      if (len > 0) {
+        const nx = -dy / len * r, ny = dx / len * r;
+        poly = [[x1 + nx, y1 + ny], [x2 + nx, y2 + ny], [x2 - nx, y2 - ny], [x1 - nx, y1 - ny]];
+      }
+      const ymin = Math.ceil(Math.min(y1, y2) - r), ymax = Math.floor(Math.max(y1, y2) + r);
+      for (let y = ymin; y <= ymax; y++) {
+        let lo = Infinity, hi = -Infinity;
+        for (const [cx, cy] of [[x1, y1], [x2, y2]]) {
+          const t = r * r - (y - cy) * (y - cy);
+          if (t >= 0) { const s = Math.sqrt(t); if (cx - s < lo) lo = cx - s; if (cx + s > hi) hi = cx + s; }
+        }
+        if (poly) for (let i = 0; i < 4; i++) {
+          const [px_, py_] = poly[i], [qx, qy] = poly[(i + 1) % 4];
+          if (py_ === qy) { if (y === py_) { lo = Math.min(lo, px_, qx); hi = Math.max(hi, px_, qx); } continue; }
+          if (y >= Math.min(py_, qy) && y <= Math.max(py_, qy)) {
+            const x = px_ + (y - py_) * (qx - px_) / (qy - py_);
+            if (x < lo) lo = x; if (x > hi) hi = x;
+          }
+        }
+        if (lo <= hi) this.span(y, Math.ceil(lo - 1e-9), Math.floor(hi + 1e-9), c);
+      }
+    }
+    this.dirty = true;
+  }
+  Circle(r, x, y) {
+    const w = Math.max(1, this.DrawWidth | 0), e = Math.floor(w / 2);
+    x = Math.round(x); y = Math.round(y);
+    const Ro = r + e + 0.5, Ri = Ro - w, fore = u32(this.ForeColor);
+    const fill = this.FillStyle === 0 ? u32(this.FillColor) : null;
+    const n = Math.ceil(Ro);
+    for (let dy = -n; dy <= n; dy++) {
+      const t = Ro * Ro - dy * dy;
+      if (t < 0) continue;
+      const xo = Math.floor(Math.sqrt(t));
+      const ti = Ri > 0 ? Ri * Ri - dy * dy : -1;
+      if (ti <= 0) { this.span(y + dy, x - xo, x + xo, fore); continue; }
+      const xi = Math.ceil(Math.sqrt(ti)) - 1;
+      this.span(y + dy, x - xo, x - xi - 1, fore);
+      this.span(y + dy, x + xi + 1, x + xo, fore);
+      if (fill !== null) this.span(y + dy, x - xi, x + xi, fill);
+    }
+    this.dirty = true;
+  }
+  Box(x1, y1, x2, y2) {
+    const w = Math.max(1, this.DrawWidth | 0), e = Math.floor(w / 2), c = u32(this.ForeColor);
+    const X1 = Math.round(x1) - e, Y1 = Math.round(y1) - e, X2 = Math.round(x2) + e, Y2 = Math.round(y2) + e;
+    for (let k = 0; k < w; k++) { this.span(Y1 + k, X1, X2, c); this.span(Y2 - k, X1, X2, c); }
+    for (let y = Y1; y <= Y2; y++) { this.span(y, X1, X1 + w - 1, c); this.span(y, X2 - w + 1, X2, c); }
+    if (this.FillStyle === 0) { const f = u32(this.FillColor); for (let y = Y1 + w; y <= Y2 - w; y++) this.span(y, X1 + w, X2 - w, f); }
+    this.dirty = true;
+  }
+  fontCss() { return "bold " + PX(this.FontSize) + "px " + FONTS[this.FontName]; }
+  TextWidth(t) { this.tctx.font = this.fontCss(); return this.tctx.measureText(t).width; }
+  Print(t, x, y) {
+    // Opaque text (as on the screenshots); rendered text snippets are cached.
+    const key = t + "|" + this.FontName + "|" + this.FontSize + "|" + this.ForeColor + "|" + this.BackColor;
+    let tile = this.cache.get(key);
+    if (!tile) {
+      const ctx = this.tctx, f = this.fontCss();
+      ctx.font = f;
+      const m = ctx.measureText(t), px = PX(this.FontSize);
+      const asc = m.fontBoundingBoxAscent ?? px * 0.905, desc = m.fontBoundingBoxDescent ?? px * 0.212;
+      const tw = Math.ceil(m.width) + 1, th = Math.ceil(asc + desc);
+      this.tc.width = tw; this.tc.height = th;
+      ctx.font = f; ctx.fillStyle = css(this.BackColor); ctx.fillRect(0, 0, tw, th);
+      ctx.fillStyle = css(this.ForeColor); ctx.textBaseline = "alphabetic"; ctx.fillText(t, 0, Math.round(asc));
+      tile = { w: tw, h: th, px: new Uint32Array(ctx.getImageData(0, 0, tw, th).data.buffer.slice(0)) };
+      if (this.cache.size > 20000) this.cache.clear();
+      this.cache.set(key, tile);
+    }
+    x = Math.round(x); y = Math.round(y);
+    for (let j = 0; j < tile.h; j++) {
+      const yy = y + j; if (yy < 0 || yy >= this.H) continue;
+      let i0 = 0, i1 = tile.w; if (x < 0) i0 = -x; if (x + i1 > this.W) i1 = this.W - x;
+      if (i0 >= i1) continue;
+      this.buf.set(tile.px.subarray(j * tile.w + i0, j * tile.w + i1), yy * this.W + x + i0);
+    }
+    this.dirty = true;
+  }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Controls
+// ---------------------------------------------------------------------------------------------
+class Ctl {
+  constructor(app, name, el, cls) {
+    this.app = app; this.Name = name; this.el = el; this.cls = cls;
+    this._vis = true; this._en = true; this._tip = ""; this.geom = [0, 0, 0, 0];
+    el.classList.add("ctl"); app.stage.appendChild(el);
+  }
+  place(l, t, w, h) {
+    this.geom = [l, t, w, h];
+    Object.assign(this.el.style, { left: l + "px", top: t + "px", width: w + "px", height: h + "px" });
+    this._visApply();
+  }
+  _visApply() { this.el.style.display = (this._vis && this.geom[0] > -500) ? "" : "none"; }
+  get Visible() { return this._vis; } set Visible(v) { this._vis = !!v; this._visApply(); }
+  get Enabled() { return this._en; } set Enabled(v) { this._en = !!v; this._apply(); }
+  get ToolTipText() { return this._tip; } set ToolTipText(v) { this._tip = v; this.el.title = v; }
+  _apply() {}
+  SetFocus() {}
+}
+
+class VLabel extends Ctl {
+  constructor(app, name, cls, caption, o = {}) {
+    super(app, name, document.createElement("div"), cls);
+    this.el.classList.add("lbl");
+    if (o.center) this.el.classList.add("mid");
+    if (o.nowrap) this.el.classList.add("nowrap");
+    this._cap = caption; this._fore = pnZwart; this._back = o.back ?? LABEL_BACK;
+    this._font = o.font ?? "Arial"; this._size = o.size ?? 8;
+    this.el.textContent = caption; this._apply();
+  }
+  get Caption() { return this._cap; }
+  set Caption(v) { if (v !== this._cap) { this._cap = v; this.app.dirtyLabels.add(this); } }  // appears at the next repaint
+  _flush() { this.el.textContent = this._cap; }
+  get ForeColor() { return this._fore; } set ForeColor(v) { this._fore = v; this._apply(); }
+  get BackColor() { return this._back; } set BackColor(v) { this._back = v; this._apply(); }
+  get FontSize() { return this._size; } set FontSize(v) { this._size = v; this._apply(); }
+  _apply() {
+    const fg = this._en ? this._fore : 0xA0A0A0, bg = this._en ? this._back : 0xF8F8F8, s = this.el.style;
+    s.color = css(fg); s.background = css(bg); s.borderColor = css(fg); s.borderWidth = "1px";
+    s.fontFamily = FONTS[this._font]; s.fontSize = PX(this._size) + "px";
+  }
+}
+
+class VButton extends Ctl {
+  constructor(app, name, cls, caption, size, onclick) {
+    super(app, name, document.createElement("button"), cls);
+    this.el.classList.add("btn"); this.el.tabIndex = -1;
+    this.el.style.fontSize = PX(size) + "px";
+    this._cap = caption; this.el.textContent = caption;
+    if (onclick) this.el.addEventListener("click", onclick);
+  }
+  get Caption() { return this._cap; } set Caption(v) { this._cap = v; this.el.textContent = v; }
+  _flush() { this.el.textContent = this._cap; }
+  _apply() { this.el.disabled = !this._en; }
+}
+
+class VSpinner extends Ctl {
+  constructor(app, name, o = {}) {
+    super(app, name, document.createElement("div"), "SP");
+    this.el.classList.add("spin");
+    this.low = o.low ?? 0; this.high = o.high ?? 2147483647; this.Increment = o.inc ?? 0.1; this._value = o.value ?? 0.1;
+    this.inp = document.createElement("input"); this.inp.type = "text";
+    this.up = document.createElement("button"); this.up.className = "up"; this.up.textContent = "▲"; this.up.tabIndex = -1;
+    this.dn = document.createElement("button"); this.dn.className = "dn"; this.dn.textContent = "▼"; this.dn.tabIndex = -1;
+    this.el.append(this.inp, this.up, this.dn);
+    this.up.addEventListener("click", () => this.spin(+1));
+    this.dn.addEventListener("click", () => this.spin(-1));
+    this.inp.addEventListener("blur", () => this._parse());
+    this.inp.addEventListener("keydown", e => { if (e.key === "Enter") this._parse(); e.stopPropagation(); });
+    this._show();
+  }
+  _fmt(v) {
+    if (Number.isInteger(this.Increment) && Number.isInteger(v)) return String(v);
+    let s = v.toFixed(4).replace(/0+$/, ""); if (s.endsWith(".")) s += "0";
+    return s.replace(".", ",");
+  }
+  _show() { this.inp.value = this._fmt(this._value); }
+  _parse() { const v = parseFloat(this.inp.value.replace(",", ".")); if (!isNaN(v)) this.Value = v; else this._show(); }
+  spin(d) { if (!this._en) return; this._parse(); this.Value = r10(this._value + d * this.Increment); }
+  get Value() { return this._value; }
+  set Value(v) { v = Math.min(Math.max(v, this.low), this.high); this._value = v; this._show(); }
+  _apply() { this.inp.disabled = this.up.disabled = this.dn.disabled = !this._en; }
+}
+
+class VEditBox extends Ctl {
+  constructor(app, name) {
+    super(app, name, document.createElement("textarea"), "EDITBOX");
+    this.el.readOnly = true; this.el.tabIndex = -1;
+  }
+  get Value() { return this.el.value; } set Value(v) { this.el.value = v; }
+}
+
+// ---------------------------------------------------------------------------------------------
+// The NUCPUC form
+// ---------------------------------------------------------------------------------------------
+class NucPuc {
+  constructor(stage, o) {
+    this.stage = stage;
+    this.rand = o.seed != null ? mulberry32(o.seed) : Math.random;
+    this.plCalled = !!o.plCalled; this.pcCMD = o.pcCMD || "";
+    this.plStop = this.plRun = this.plAbort = this.plSlow = this.plDemo = this.plClustered = false;
+    this.pnGroupSize = 1;
+    this.pcClF = this.pcNuC = this.pcPuC = this.pcClF_NxtG = this.pcClF_ActG1 = this.pcLIM = "";
+    this.pnW = FORM_W; this.pnH = FORM_H;
+    this.pnDist = 40; this.pnHOffSet = 140; this.pnVOffSet = 50;
+    this.pnHPosNuC = this.pnHOffSet + this.pnDist * 1;
+    this.pnHPosPuC = this.pnHOffSet + this.pnDist * 10;
+    this.pnRad = 10;
+    this.CNP = [null]; for (let nX = 1; nX <= 10; nX++) this.CNP.push(String.fromCharCode(nX - 1 + 48).repeat(3));
+    this.SSP = Array.from({ length: 11 }, () => new Array(11).fill(0.5));
+    this.SSD = Array.from({ length: 11 }, () => new Array(11).fill(0.0));
+    this.SUMSSP = new Array(11).fill(0); this.SUMSSD = new Array(11).fill(0);
+    this.NUCPUC = new Array(12).fill("");
+    this.running = false; this.busy = 0; this.dead = false; this.keys = 0; this.pausing = false;
+    this.speed = 1; this._pace_t = performance.now(); this._debt = 0; this._lastEv = 0;
+    this.dirtyLabels = new Set(); this.controls = {};
+
+    this.g = new FormGraphics(VIEW_W, this.pnH, pnGrijs);
+    this.cv = document.createElement("canvas"); this.cv.id = "cv";
+    this.cv.width = VIEW_W; this.cv.height = this.pnH;
+    stage.appendChild(this.cv);
+    this.ctx = this.cv.getContext("2d");
+    this.build();
+    const loop = () => { if (this.dead) return; this.flush(); requestAnimationFrame(loop); };
+    requestAnimationFrame(loop);
+  }
+
+  // -- infrastructure -------------------------------------------------------------------------
+  flush() {
+    for (const l of this.dirtyLabels) l._flush();
+    this.dirtyLabels.clear();
+    if (this.g.dirty) { this.ctx.putImageData(this.g.img, 0, 0); this.g.dirty = false; }
+  }
+  async DOEVENTS(force) {
+    const now = performance.now();
+    if (force || now - this._lastEv > 30) {   // do not repaint at every step, as in VFP
+      this._lastEv = now;
+      this.flush();
+      await yieldNow();
+    }
+  }
+  async rawWait(secs) {
+    const end = performance.now() + secs * 1000;
+    for (;;) {
+      await this.DOEVENTS();
+      const rem = end - performance.now();
+      if (rem <= 0) break;
+      if (rem > 5) { this.flush(); await sleep(Math.min(rem - 2, 15)); }   // otherwise busy-wait
+    }
+  }
+  async wait(secs) {   // playback speed: 0.5x = all pauses twice as long
+    await this.rawWait(secs / this.speed);
+    this._pace_t = performance.now();
+  }
+  async pace() {       // stretch computing time proportionally at speed < 1
+    let now = performance.now();
+    if (this.speed < 1) {
+      this._debt += (now - this._pace_t) * (1 / this.speed - 1);
+      if (this._debt > 10) { const d = this._debt; this._debt = 0; await this.rawWait(d / 1000); now = performance.now(); }
+    }
+    this._pace_t = now;
+  }
+  INKEY() { if (this.keys > 0) { this.keys--; return 1; } return 0; }
+  SetAll(prop, value, cls) { for (const c of Object.values(this.controls)) if (cls === undefined || c.cls === cls) c[prop] = value; }
+  add(c) { this.controls[c.Name] = c; this[c.Name] = c; return c; }
+  commitSpinners() { for (const c of Object.values(this.controls)) if (c instanceof VSpinner) c._parse(); }
+  stop() { this.dead = true; }
+
+  // -- building the form (ADD OBJECT / Activate) ---------------------------------------------
+  build() {
+    const pnW = this.pnW, pnH = this.pnH;
+    // TXT: in VFP a text box in the right half of the screen that the program itself never fills
+    // (SHOWTXT is never called); it only kept half the screen free in the VFP article environment.
+    // Not needed here: not shown, only its Value remains for DORUN.
+    this.TXT = { Value: "" };
+    const ss = this.add(new VLabel(this, "SS", "LABEL", "", { font: "Courier New", size: 7, back: pnGrijs }));
+    ss.ToolTipText = "For display only."; ss.place(0, 250, 100, 150);
+
+    // CBU1..4 : toggle switches at the top (CBU5 = invisible focus button)
+    let cT = "|Toggle switch :" + pcLF;
+    let cTTT = cT + "for CF scrambling." + cT + "to choose between the following starting conditions :" + pcLF +
+      "Groups of CFs each activating their only target PuC ('one-to-one') - or -" + pcLF +
+      "Each CF capable of activating all ten PuCs ('one-to-many', the early development situation)." + pcLF +
+      "This last setting also automatically sets the next setting to 'Group size at start=10'.";
+    cTTT += cT + "Setting the group size to one is just for use with the initial demo showing the 'partnership' formation," + pcLF +
+      "Setting the group size to ten is for the synchronous group activations." + pcLF +
+      "Each setting also resets the preprogrammed choices for LTP and LTD.";
+    cTTT += cT + "for PuC axon scrambling.|";
+    let caps = ",CFs (+ cols) not scrambled,CF hand over : one to one,Group size at start = 1,PuC axons not scrambled,,";
+    const nW4 = (pnW / 2) / 4;
+    for (let nX = 1; nX <= 4; nX++) {
+      const b = this.add(new VButton(this, "CBU" + nX, "CBU", STREXTRACT(caps, ",", nX), 8));
+      b.el.addEventListener("click", () => this.CBU_Click(b));
+      b.ToolTipText = STREXTRACT(cTTT, "|", nX);
+      b.place((nX - 1) * nW4, 5, nW4, 20);
+    }
+    this.CBU5 = { Caption: "", SetFocus: () => { this.commitSpinners(); if (document.activeElement) document.activeElement.blur(); } };
+
+    // CBLU1..2 : Red / Fast
+    cTTT = "|Toggle switch : 'Red' shows PuC terminals in red when activated, 'No red' doesn't (making the display quieter)." +
+      "|Toggle switch : 'Fast' executes the program at top speed, 'Slow' inserts a small pause when a line width changes. " +
+      "You can however use the different interrupt options of the buttons below.|";
+    for (let nX = 1; nX <= 2; nX++) {
+      const l = this.add(new VLabel(this, "CBLU" + nX, "CBLU", STREXTRACT(",Red,Fast,", ",", nX), { size: 8 }));
+      l.ToolTipText = STREXTRACT(cTTT, "|", nX); l.place(0, 210 + (nX - 1) * 20, 100, 20);
+      l.el.addEventListener("click", () => this.CBLU_Click(l));
+    }
+
+    // CBLD1..5 : interrupt buttons at the bottom
+    cTTT = "|Click to interrupt program execution after each PuC terminal branch firing (the elementary program step)." +
+      "|Click to interrupt program execution after each PuC having fired all it's terminal branches." +
+      "|Click to interrupt program execution after the processing of each PuC group " +
+      "(which is the equivalent of what is considered to have happened synchronously in vivo)." +
+      "|Click to interrupt program execution when the conditions are ready to decrement the used PuC group size." +
+      "|Click to clear your above interrupt setting, and to continue the program without interruption (when it is executing).|";
+    caps = ",Single PuC axon branch,Single PuC,PuC group,PuC group size,Clear interrupts,";
+    for (let nX = 1; nX <= 5; nX++) {
+      const l = this.add(new VLabel(this, "CBLD" + nX, "CBLD", STREXTRACT(caps, ",", nX), { size: 7 }));
+      l.ToolTipText = STREXTRACT(cTTT, "|", nX); l.place(0, pnH - (6 - nX) * 28, 100, 28);
+      l.el.addEventListener("click", () => this.CBLD_Click(l));
+    }
+
+    // CBD1..3 : Run / status / Abort
+    cTTT = "|Starts execution|For status display only|Aborts execution|";
+    const nW = (this.pnHPosPuC + 42) - (this.pnHPosNuC - 42);
+    for (let nX = 1; nX <= 3; nX++) {
+      const l = this.add(new VLabel(this, "CBD" + nX, "CBD", STREXTRACT(",Run,,Abort,", ",", nX), { size: 8, back: pnGrijs, nowrap: true }));
+      l.ToolTipText = STREXTRACT(cTTT, "|", nX);
+      const left = this.pnHPosNuC - 42 + [0, 0, 1, 4][nX] * nW / 5;
+      l.place(left, this.pnVOffSet + this.pnDist * 10 + 55, nW / 5 * (nX === 2 ? 3 : 1) + 2, 20);
+      // mouse: act on press (VFP MouseDown); touch: act on tap, so that press-and-hold can show the tooltip
+      l.el.addEventListener("pointerdown", e => { if (e.pointerType !== "touch") this.CBD_MouseDown(l); });
+      l.el.addEventListener("click", () => { if (lastPointerType === "touch") this.CBD_MouseDown(l); });
+    }
+
+    // CBR1..10 : '?' next to the PuC numbers
+    for (let nX = 1; nX <= 10; nX++) {
+      const l = this.add(new VLabel(this, "CBR" + nX, "CBR", "?", { size: 6, center: true }));
+      l.ToolTipText = "Click to see (in the left side table) the actual SSs of all terminals of this PuC.";
+      l.place(this.pnHPosPuC + 23, this.pnVOffSet + this.pnDist * nX + 2, this.pnRad, this.pnRad);
+      l.el.addEventListener("click", () => this.CBR_Click(l));
+    }
+
+    // SPLB1..5 + SP1..5 : parameters
+    cTTT = "|When the sum of SSs of FIRING PuC terminals (see figures underneath the NuCs while executing) converging on an ACTIVATED NuC (red circle)" +
+      " exceeds this threshold, LTP occurs (at these firing PuC-NuC synapses only) - and the NuC will show in yellow." +
+      "|Sets the step by which LTP increases the SSs." +
+      "|When the sum of SSs of FIRING PuC terminals (see figures underneath the NuCs while executing) converging on a NON-ACTIVATED NuC (NO red circle)" +
+      " exceeds this threshold, LTD occurs (at these firing synapses only) - and in this case the NuC will show in dark blue, " +
+      "otherwise it will show in it's 'basic' green (no LTD nor LTP occurring). LTD not applicable when group size=1." +
+      "|Sets the step by which LTD decreases the SSs. LTD not applicable when group size=1." +
+      "|When one CF activates many PuCs :" + pcLF +
+      "Repeated activation of the same PuC-group before the group size is allowed to decrement" +
+      " will help to avoid LTP lagging behind and stopping or even reverting" +
+      " when specific CFs have not been activated enough due to asymmetric random activation.|";
+    caps = ",LTP threshold,LTP step,LTD threshold,LTD step,Repeating factor,";
+    for (let nX = 1; nX <= 5; nX++) {
+      const b = this.add(new VButton(this, "SPLB" + nX, "SPLB", STREXTRACT(caps, ",", nX), 7));
+      b.ToolTipText = STREXTRACT(cTTT, "|", nX); b.place(0, 60 + (nX - 1) * 30, 50, 30);
+      if (nX === 5) b.Enabled = false;
+      let sp;
+      if (nX === 3) sp = new VSpinner(this, "SP3", { low: 1.1 });
+      else if (nX === 5) { sp = new VSpinner(this, "SP5", { low: 1, high: 30, inc: 1, value: 5 }); sp.Enabled = false; }
+      else sp = new VSpinner(this, "SP" + nX);
+      this.add(sp); sp.place(50, 60 + (nX - 1) * 30, 50, 30);
+    }
+  }
+
+  async activate() {
+    this.busy++;
+    try {
+      // Clicking twice sets LTP and LTD values and dims appropriate buttons for groupsize=1
+      await this.CBU_Click(this.CBU3);
+      await this.CBU_Click(this.CBU3);
+      if (this.plCalled) await this.DEMO(); else await this.DORUN(10);
+    } finally { this.busy--; }
+  }
+
+  // -- PROCEDURE FIBERS ------------------------------------------------------------------------
+  async FIBERS(nClF, nClF_Act, nC, nG, nB) {
+    const g = this.g, { pnHPosNuC, pnHPosPuC, pnVOffSet, pnDist, pnRad } = this;
+    await this.DOEVENTS();
+    const nVSV = pnVOffSet + pnDist - 30, nHMidLine = (pnHPosNuC + pnHPosPuC) / 2, nW = 90;
+    if (nClF === 1) {   // CN box and permanent texts
+      g.DrawWidth = 5; g.ForeColor = pnGroen; g.FillStyle = 1;
+      g.Box(pnHPosNuC - 42, pnVOffSet + pnDist / 2, pnHPosPuC + 42, pnVOffSet + pnDist * 11);
+      g.ForeColor = pnZwart; g.FontSize = 8;
+      let cT = "Cerebellar (sub)nucleus";
+      g.Print(cT, nHMidLine - g.TextWidth(cT) / 2, pnVOffSet + pnDist * .5 - 6);
+      cT = "NuCs";
+      g.Print("NuCs", pnHPosNuC - pnRad - g.TextWidth(cT) / 2, pnVOffSet + pnDist * 10 + 20);
+      cT = "Branching PuC axon terminals";
+      g.Print(cT, pnHPosPuC - g.TextWidth(cT), pnVOffSet + pnDist * 10 + 17);
+      g.FontSize = 6;
+      cT = "Line width represents PuC-NuC synapse strength (evolving)";
+      g.Print(cT, nHMidLine - g.TextWidth(cT) / 2, pnVOffSet + pnDist * 10 + 5);
+    }
+    const nNuCPos = AT(LTSTR(nClF - 1), this.pcNuC), nVODNuC = pnVOffSet + pnDist * nNuCPos;
+    let nNuCPos_Act = 0, nVODNuC_Act = 0, nVNuC_Act = 0, nVClF_Act = 0;
+    if (nClF_Act > 0) {
+      nNuCPos_Act = AT(LTSTR(nClF_Act - 1), this.pcNuC);
+      nVODNuC_Act = pnVOffSet + pnDist * nNuCPos_Act;
+      nVNuC_Act = nVSV - nNuCPos_Act * 3;
+      nVClF_Act = nVSV - nClF_Act * 3;
+    }
+    const nPuCPos = AT(LTSTR(nClF - 1), this.pcPuC), nVODPuC = pnVOffSet + pnDist * nPuCPos;
+    const nVClF = nVSV - nClF * 3, nVNuC = nVSV - nNuCPos * 3, nVPuC = nVSV - nPuCPos * 3;
+    const yc = nClF_Act === 0 ? nVODNuC : nVODNuC_Act;
+
+    // Circles and numbers
+    g.FillStyle = 0; g.DrawWidth = 1; g.FillColor = nC;
+    g.Circle(pnRad, pnHPosNuC - pnRad, yc);
+    g.ForeColor = nC; g.FillStyle = 1; g.DrawWidth = 2;
+    if (nC === pnRood) { g.FillColor = pnGroen; g.Circle(pnRad + 2, pnHPosNuC - pnRad, yc); }   // ring around the circle
+    else { g.ForeColor = g.BackColor; g.Circle(pnRad + 2, pnHPosNuC - pnRad, yc); }            // wipes the ring away
+    g.DrawWidth = 1; g.FillStyle = 0;
+    g.ForeColor = pnZwart; g.FontSize = 8;
+    g.Print(STR(Math.abs(nClF), 2), pnHPosNuC - 32, nVODNuC - 14);   // the NuC numbers
+    g.Print(STR(Math.abs(nClF), 2), pnHPosPuC + 22, nVODPuC - 14);   // the PuC numbers
+
+    // CF lines (yellow)
+    g.ForeColor = nG;
+    if (nClF_Act === 0) {
+      const xc = pnHPosNuC - 80 + (11 - nNuCPos) * 3;
+      g.Line(0, nVClF, 10, nVClF);
+      g.Line(10, nVClF, pnHPosNuC - pnRad * 9, nVNuC);
+      g.Line(pnHPosNuC - pnRad * 9, nVNuC, nHMidLine - nW, nVNuC);
+      g.Line(xc, nVNuC, xc, nVODNuC);
+      g.Line(xc, nVODNuC, pnHPosNuC - pnRad * 2, nVODNuC);
+    } else {
+      const xc = pnHPosNuC - 80 + (11 - nNuCPos_Act) * 3;
+      g.Line(0, nVClF_Act, 10, nVClF_Act);
+      g.Line(10, nVClF_Act, pnHPosNuC - pnRad * 9, nVNuC_Act);
+      g.Line(pnHPosNuC - pnRad * 9, nVNuC_Act, nHMidLine - nW, nVNuC_Act);
+      g.Line(xc, nVNuC_Act, xc, nVODNuC_Act);
+      g.Line(xc, nVODNuC_Act, pnHPosNuC - pnRad * 2, nVODNuC_Act);
+    }
+    // Transition lines and further PuC lines (blue)
+    g.ForeColor = nB;
+    g.Line(nHMidLine - nW, nVNuC, nHMidLine + nW + 1, nVPuC);
+    const xp = pnHPosPuC + 80 - (11 - nPuCPos) * 3;
+    g.Line(nHMidLine + nW + 1, nVPuC, xp, nVPuC);
+    g.Line(xp, nVPuC, xp, nVODPuC);
+    g.Line(xp, nVODPuC, pnHPosPuC, nVODPuC);
+  }
+
+  // -- PROCEDURE DEMO --------------------------------------------------------------------------
+  async DEMO() {
+    this.plDemo = true;
+    this.SetAll("Visible", false);
+    this.plRun = false;
+    const c = this.pcCMD;
+    if (c === "1") {
+      await this.DORUN(1, 1);
+    } else if (c === "2") {
+      await this.CBU_Click(this.CBU4); this.CBU4.Visible = true;
+      await this.DORUN(1, 1);
+    } else if (c === "3") {
+      await this.CBU_Click(this.CBU4); this.CBU4.Visible = true;
+      await this.CBU_Click(this.CBU1); this.CBU1.Visible = true;
+      await this.DORUN(1, 1);
+    } else if (c === "4") {
+      await this.CBU_Click(this.CBU4); this.CBU4.Visible = true;
+      await this.CBU_Click(this.CBU1); this.CBU1.Visible = true;
+      this.plStop = true;
+      await this.CBD_MouseDown(this.CBD1);
+    } else if (c === "5") {
+      await this.CBU_Click(this.CBU4); this.CBU4.Visible = true;
+      await this.CBU_Click(this.CBU1); this.CBU1.Visible = true;
+      this.plSlow = true;
+      this.SetAll("Visible", true, "CBD");
+      await this.CBD_MouseDown(this.CBD1);
+    } else if (c === "6") {
+      await this.CBU_Click(this.CBU4); this.CBU4.Visible = true;
+      await this.CBU_Click(this.CBU1); this.CBU1.Visible = true;
+      this.CBU3.Visible = true;
+      await this.CBU_Click(this.CBU3);
+      this.plSlow = true;
+      this.SetAll("Visible", true, "CBD");
+      await this.CBD_MouseDown(this.CBD1);
+    } else if (c === "7") {
+      this.SetAll("Visible", true, "CBU");
+      await this.CBU_Click(this.CBU4); await this.CBU_Click(this.CBU1); await this.CBU_Click(this.CBU2);
+      this.SetAll("Visible", true, "CBD");
+      await this.CBD_MouseDown(this.CBD1);
+    } else if (c === "8") {
+      this.SetAll("Visible", true);
+      await this.DORUN(1, 1);
+    } else if (c === "9") {
+      this.SetAll("Visible", true);
+      await this.CBU_Click(this.CBU4); await this.CBU_Click(this.CBU1); await this.CBU_Click(this.CBU2);
+      this.SP2.Value = .5;
+      this.SP5.Value = 1;
+      await this.CBD_MouseDown(this.CBD1);
+    }
+  }
+
+  // -- PROCEDURE DORUN -------------------------------------------------------------------------
+  async DORUN(nClF_ActGLen, nTH) {
+    const g = this.g, SSP = this.SSP, SSD = this.SSD, SUMSSP = this.SUMSSP, SUMSSD = this.SUMSSD;
+    const { pnHPosNuC, pnHPosPuC, pnVOffSet, pnDist, pnRad } = this;
+    let nSteps = 0, nTimes = 0, nClF_Act = 0, nClF_ActPos = 0, lGroupChange = false;
+    for (let a = 0; a < 11; a++) for (let b = 0; b < 11; b++) { SSP[a][b] = 0.5; SSD[a][b] = 0.0; }
+    this.SCRAMBLE(0);
+    this.pcLIM = "0".repeat(10);
+    this.TXT.Value = "";
+    this.SS.Caption = "";
+    const nTHLTP = this.SP1.Value, nTHLTD = this.SP3.Value;
+    let nSum = 0;
+    // First simply draw the 'network'
+    for (let nX = 1; nX <= 10; nX++) await this.FIBERS(nX, 0, pnGroen, pnGeel, pnBlauw);
+    g.ForeColor = pnZwart;
+    for (let nX = 1; nX <= 10; nX++)
+      for (let nY = 1; nY <= 10; nY++)
+        g.Line(pnHPosNuC, pnVOffSet + pnDist * nX, pnHPosPuC, pnVOffSet + pnDist * nY);
+    await this.DOEVENTS(true);
+    if (!this.plRun) return;   // was only for display
+
+    this.running = true;
+    try {
+      this.ENABLECTRLS(false);
+      this.CBD3.Enabled = true;
+      this.CBD2.FontSize = 8;
+      this.CBD2.ToolTipText = "";
+      this._pace_t = performance.now(); this._debt = 0;
+      const FULL = ":".repeat(10);
+      while (nSteps < 100000) {
+        // each cycle represents a synchronous activation of a CF group
+        let nAvgSSP = 0;
+        while (nSteps < 100000) {
+          if (nTH === 1) {
+            if (this.pcLIM === FULL) break;   // ALL NuC-PuC pairs connected by lines of width 10
+          } else {
+            if (ge(nAvgSSP * (nClF_ActGLen - 1) / nClF_ActGLen, nTHLTP * 3)) break;
+            if (this.pcLIM === FULL && eq(nSum, 10 + (this.SP3.Value - this.SP4.Value) * 9) && nTimes >= 500) break;
+          }
+          const nRep = Math.trunc(this.SP5.Value);
+          const many = this.CBU2.Caption.includes("many");
+          const nTEnd = many ? nRep * 11 - 1 : nRep;
+          for (let nT = nRep; nT <= nTEnd; nT++) {
+            this.pcClF_NxtG = "0123456789";
+            const cClF_ActG = many ? this.NUCPUC[Math.trunc(nT / nRep)] : this.PICKGROUPMEMBERS(nClF_ActGLen);
+
+            // Conversion to show the groups in the caption of CBLD3
+            this.pcClF_ActG1 = "";
+            for (let nX = 1; nX <= nClF_ActGLen; nX++) {
+              const ch = SUBSTR(cClF_ActG, nX, 1);
+              this.pcClF_ActG1 += String.fromCharCode((ch ? ch.charCodeAt(0) : 0) + 1) + (nX < nClF_ActGLen ? "," : "");
+              this.pcClF_ActG1 = this.pcClF_ActG1.split(":").join("10");
+            }
+
+            // 1) SS sums of the CF-activated NuCs
+            SUMSSP.fill(0); SUMSSD.fill(0);
+            for (const ch of cClF_ActG) {
+              const nNuCID = VAL(ch) + 1, nPuCPos = AT(LTSTR(nNuCID - 1), this.pcPuC);
+              for (let nY = 1; nY <= 10; nY++) { SUMSSP[nY] += SSP[nPuCPos][nY]; SUMSSD[nY] += SSD[nPuCPos][nY]; }
+            }
+            g.FontSize = 6; g.ForeColor = pnZwart;
+            for (let nY = 1; nY <= 10; nY++) g.Print(STR(SUMSSP[nY] + SUMSSD[nY], 5, 2), pnHPosNuC - 19, pnVOffSet + pnDist * nY + 12);
+
+            const inGroup = nY => cClF_ActG.includes(LTSTR(VAL(this.pcNuC[nY - 1])));
+            if (many) {
+              nAvgSSP = 9999;   // minimum SUMSSP
+              for (let nY = 1; nY <= 10; nY++) if (inGroup(nY)) nAvgSSP = Math.min(nAvgSSP, SUMSSP[nY]);
+            } else {
+              nAvgSSP = 0; let n = 0;   // average SUMSSP
+              for (let nY = 1; nY <= 10; nY++) if (inGroup(nY)) { n++; nAvgSSP += SUMSSP[nY]; }
+              nAvgSSP = n ? nAvgSSP / n : 0;
+            }
+
+            // 2) Drawing the red activated lines
+            if (many) {
+              nClF_Act = VAL(SUBSTR(cClF_ActG, Math.trunc(this.rand() * cClF_ActG.length) + 1, 1)) + 1;
+              nClF_ActPos = AT(LTSTR(nClF_Act - 1), this.pcNuC);
+            }
+            const actif = nY => many ? (inGroup(nY) && nClF_ActPos === nY) : inGroup(nY);
+
+            for (let nMember = 1; nMember <= cClF_ActG.length; nMember++) {
+              const nNuCID = VAL(cClF_ActG[nMember - 1]) + 1;
+              const nPuCPos = AT(LTSTR(nNuCID - 1), this.pcPuC);
+              await this.FIBERS(nNuCID, many ? nClF_Act : 0, pnRood, pnRood, pnRood);
+              for (let nY = 1; nY <= 10; nY++) {
+                if (this.plAbort) { await this.ABORT(nY); return; }
+                if (this.CBLU1.Caption === "Red") {
+                  g.ForeColor = pnRood; g.DrawWidth = 1;
+                  g.Line(pnHPosPuC, pnVOffSet + pnDist * nPuCPos, pnHPosNuC, pnVOffSet + pnDist * nY);
+                }
+                g.DrawWidth = 1; g.FillColor = pnGroen;
+                if (actif(nY)) { if (ge(SUMSSP[nY] + SUMSSD[nY], nTHLTP)) g.FillColor = pnGeel; }
+                else { if (ge(SUMSSP[nY] + SUMSSD[nY], nTHLTD)) g.FillColor = pnBlauw; }
+                g.Circle(pnRad, pnHPosNuC - pnRad, pnVOffSet + pnDist * nY);
+                nSteps++;
+                if (this.speed < 1) await this.pace();
+                this.CBD1.Caption = String(nSteps);
+                if (this.plStop && nY === 10) { this.ENABLECTRLS(true); return; }
+                if (this.plDemo && !this.plStop && nSteps <= 10) await this.SLEEP(.2);
+                await this.PAUSE12(nNuCID, nY);
+              }
+              if (this.plDemo && nClF_ActGLen < 3) await this.wait(0.002);   // FOR 1 TO 100000 DOEVENTS (VFP 9: 0.002 s)
+              await this.PAUSE(0);
+              // (In VFP the demo message below cleared lGroupChange before PAUSE34 was reached, so the
+              //  'PuC group size' interrupt never fired in demo mode; here it does when the button is visible.)
+              const lGroupChangeBefore = lGroupChange;
+              if (this.plDemo && lGroupChange && nMember === nClF_ActGLen) {
+                lGroupChange = false;
+                this.CBD2.Caption = "Group size decrement : " + (nClF_ActGLen + 1) + " > " + nClF_ActGLen;
+                await this.SLEEP(1);
+                if (this.pnGroupSize === 10 && nClF_ActGLen === 2) this.plSlow = false;
+              }
+              lGroupChange = (await this.PAUSE34(nMember, nClF_ActGLen, lGroupChangeBefore)) && lGroupChange;
+              if (this.plDemo && !this.plStop && nSteps <= 100) await this.SLEEP(.4);
+              if (this.plDemo && nSteps > 100) this.CBLU1.Caption = "No red";
+              if (this.plSlow) await this.SLEEP(.05);
+            }
+
+            // Registering the line thickening and adapting the synapses
+            for (let nMember = 1; nMember <= cClF_ActG.length; nMember++) {
+              const nNuCID = VAL(cClF_ActG[nMember - 1]) + 1;
+              const nNuCPos = AT(LTSTR(nNuCID - 1), this.pcNuC);
+              const nPuCPos = AT(LTSTR(nNuCID - 1), this.pcPuC);
+              for (let nY = 1; nY <= 10; nY++) {
+                const nDW = INT(SSP[nPuCPos][nY] + SSD[nPuCPos][nY]);   // current line width
+                if (nY === nNuCPos && this.pcLIM.charCodeAt(nNuCPos - 1) - 48 < nDW) {
+                  this.pcLIM = STUFF(this.pcLIM, nNuCPos, 1, String.fromCharCode(nDW + 48));
+                  this.CBD2.Caption = this.pcLIM;
+                }
+                const ss = SSP[nPuCPos][nY] + SSD[nPuCPos][nY];
+                if (actif(nY)) {
+                  if (ge(SUMSSP[nY] + SUMSSD[nY], nTHLTP))           // hyperpolarization and activated -> LTP
+                    if (lt(ss, 10)) SSP[nPuCPos][nY] = r10(SSP[nPuCPos][nY] + Math.min(this.SP2.Value, 10 - ss));
+                } else {
+                  if (ge(SUMSSP[nY] + SUMSSD[nY], nTHLTD))           // hyperpolarization only -> LTD
+                    if (ge(ss, nTHLTD)) SSD[nPuCPos][nY] = r10(SSD[nPuCPos][nY] - this.SP4.Value);
+                }
+                g.ForeColor = g.BackColor; g.DrawWidth = nDW;   // erase with the width it had in red
+                g.Line(pnHPosPuC, pnVOffSet + pnDist * nPuCPos, pnHPosNuC, pnVOffSet + pnDist * nY);
+                g.ForeColor = pnZwart; g.DrawWidth = INT(SSP[nPuCPos][nY] + SSD[nPuCPos][nY]);   // black with the new width
+                await this.SLOW(nDW);
+                g.Line(pnHPosPuC, pnVOffSet + pnDist * nPuCPos, pnHPosNuC, pnVOffSet + pnDist * nY);
+              }
+              await this.FIBERS(nNuCID, 0, pnGroen, pnGeel, pnBlauw);   // fibers back in their original colour
+            }
+
+            nSum = 0;
+            for (let nY = 1; nY <= 10; nY++) nSum += Math.max(this.SP3.Value - this.SP4.Value, SUMSSP[nY] + SUMSSD[nY]);
+            if (eq(nSum, 10 + (this.SP3.Value - this.SP4.Value) * 9)) nTimes++;   // 500 extra loops
+          }
+        }
+        if (this.CBU2.Caption.includes("many") && nClF_ActGLen > 1) this.CFRETRACT(nClF_ActGLen);
+        nClF_ActGLen = Math.max(0, nClF_ActGLen - 1);
+        lGroupChange = true;
+        if (nClF_ActGLen === 0) break;
+      }
+
+      this.SetAll("ForeColor", pnZwart, "CBD");
+      this.CBD1.Caption = "Run";
+      if (nSteps >= 100000) {
+        this.CBD2.FontSize = 7;
+        this.CBD2.Caption = "FAILED (get the cursor over here to see the tooltiptext)";
+        this.CBD2.ToolTipText = "FAILED RUN" + pcLF + "LTP to weak in comparison to LTD - or - " +
+          "the repetition has to be increased to avoid trailing behind and falling off of CFs " +
+          "when random activation is too asymmetric.";
+      } else {
+        this.CBD2.Caption = "RUN COMPLETED in " + nSteps + " steps";
+      }
+      this.ENABLECTRLS(true);
+      this.CBD3.Enabled = false;
+      if (this.plDemo) this.CBLU1.Caption = "Red";
+      await this.DOEVENTS(true);
+    } finally {
+      this.running = false;
+    }
+  }
+
+  async SLEEP(nDur) { await this.wait(nDur); }
+
+  // -- PROCEDURE PICKGROUPMEMBERS --------------------------------------------------------------
+  PICKGROUPMEMBERS(nLen) {
+    let cX = "";
+    if (!this.plClustered) {   // Random
+      let cGroup = this.pcClF;
+      for (let k = 0; k < nLen; k++) {
+        cX += SUBSTR(cGroup, this.rand() * cGroup.length + 1, 1);
+        cGroup = STUFF(cGroup, AT(cX.slice(-1), cGroup), 1, "");
+      }
+    }
+    if (this.plClustered) {
+      cX = this.pcClF_NxtG.slice(0, nLen);
+      this.pcClF_NxtG = this.pcClF_NxtG.slice(nLen);
+      if (this.pcClF_NxtG.length < nLen) this.pcClF_NxtG = "";
+    }
+    return cX;
+  }
+
+  // -- PROCEDURE ABORT -------------------------------------------------------------------------
+  async ABORT(nY) {
+    const g = this.g;
+    this.ENABLECTRLS(true);
+    this.CBD3.ForeColor = pnZwart;
+    g.Cls();
+    for (let nMember = 1; nMember <= 10; nMember++) {
+      const nPuCPos = AT(LTSTR(nMember - 1), this.pcPuC);
+      g.ForeColor = pnZwart;
+      for (let y = 1; y <= 10; y++) {
+        g.DrawWidth = INT(this.SSP[nPuCPos][y] + this.SSD[nPuCPos][y]);
+        g.Line(this.pnHPosPuC, this.pnVOffSet + this.pnDist * nPuCPos, this.pnHPosNuC, this.pnVOffSet + this.pnDist * y);
+      }
+      await this.FIBERS(nMember, 0, pnGroen, pnGeel, pnBlauw);
+    }
+    this.CBR_Click(this.controls["CBR" + nY]);
+    this.CBD1.Caption = "Run";
+    if (this.plDemo) this.CBLU1.Caption = "Red";
+    await this.DOEVENTS(true);
+  }
+
+  // -- PROCEDURE PAUSE12 / PAUSE34 / PAUSE / SLOW ----------------------------------------------
+  // An interrupt button only acts when it is visible (in demos 1-7 these buttons are hidden).
+  isOn(c) { return c.ForeColor === pnRood && c.Visible; }
+  async PAUSE12(nNuCID, nY) {
+    if (this.isOn(this.CBLD1)) await this.PAUSE(1, nNuCID);
+    if (this.isOn(this.CBLD2) && nY === 10) await this.PAUSE(2, nNuCID);
+  }
+  async PAUSE34(nMember, nClF_ActGLen, lGroupChange) {
+    if (this.isOn(this.CBLD3) && nMember === nClF_ActGLen) await this.PAUSE(3);
+    if (this.isOn(this.CBLD4) && lGroupChange && nMember === nClF_ActGLen) { await this.PAUSE(4); lGroupChange = false; }
+    return lGroupChange;
+  }
+  async PAUSE(nStep, nX = 0) {
+    this.CBLD2.Caption = "Single PuC" + (nX ? pcLF + LTSTR(nX) : "");
+    this.CBLD3.Caption = "PuC group" + pcLF + this.pcClF_ActG1;
+    this.CBLD4.Caption = "PuC group size" + pcLF + LTSTR(this.pcClF_ActG1.split(",").length);
+    if (nStep === 0) return;
+    if (!nX) nX = VAL(this.pcClF_ActG1.slice(this.pcClF_ActG1.lastIndexOf(",") + 1));
+    const nPos = AT(LTSTR(nX - 1), this.pcPuC);
+    if (nPos >= 1 && nPos <= 10) this.CBR_Click(this.controls["CBR" + nPos]);
+    const cbld = this.controls["CBLD" + nStep];
+    this.keys = 0;
+    // (Unlike VFP) the pause message blinks red on yellow/white, and a click on it also continues.
+    const c2 = this.CBD2, fg0 = c2.ForeColor, bg0 = c2.BackColor, tip0 = c2.ToolTipText;
+    this.pausing = true;
+    c2.ToolTipText = "Press any key, or click here, to continue";
+    c2.el.style.cursor = "pointer";
+    try {
+      while (cbld.ForeColor === pnRood) {
+        c2.Caption = "Press any key to continue " + this.pcLIM;
+        c2.ForeColor = pnRood;
+        c2.BackColor = Math.floor(performance.now() / 500) % 2 ? pnGeel : pnWit;
+        if (this.plAbort || this.INKEY() > 0) break;
+        this.flush();
+        await sleep(15);
+      }
+    } finally {
+      this.pausing = false;
+      c2.ForeColor = fg0; c2.BackColor = bg0; c2.ToolTipText = tip0; c2.el.style.cursor = "";
+    }
+    this.CBD2.Caption = "";
+    if (this.plAbort) this.CBD2.Caption = "Execution aborted " + this.pcLIM;
+  }
+  async SLOW(nDW) {
+    if (this.CBLU2.Caption === "Slow" && nDW !== this.g.DrawWidth) await this.wait(0.017);   // FOR 1 TO 1000000 DOEVENTS
+  }
+
+  // -- PROCEDURE CFRETRACT ---------------------------------------------------------------------
+  CFRETRACT(nLen) {
+    let cap = "Used PuC-groups" + pcLF + "for each CF";
+    for (let nX = 1; nX <= 10; nX++) {
+      const cCF = this.NUCPUC[11].slice(0, 1);
+      this.NUCPUC[11] = this.NUCPUC[11].slice(1);
+      if (cCF) this.NUCPUC[nX] = this.NUCPUC[nX].split(cCF).join("");
+      cap += pcLF + "CF " + nX + " > " + this.NUCPUC[nX];
+    }
+    this.SS.Caption = cap;
+    this.NUCPUC[11] = this.NUCPUC[11].slice(1);
+  }
+
+  // -- PROCEDURE ENABLECTRLS -------------------------------------------------------------------
+  ENABLECTRLS(lEnable) {
+    this.SetAll("Enabled", lEnable, "CBU");
+    this.SetAll("Enabled", lEnable, "SP");
+    this.SetAll("Enabled", lEnable, "SPLB");
+    this.SPLB5.Enabled = this.plClustered;
+    this.SP5.Enabled = this.plClustered;
+  }
+
+  // -- PROCEDURE SCRAMBLE / RSTRING / RASORT ---------------------------------------------------
+  SCRAMBLE(nNP) {
+    const CNP = this.CNP;
+    if (nNP === 0) {
+      this.pcClF = this.pcNuC = this.pcPuC = "";
+      for (let nX = 1; nX <= 10; nX++) {
+        this.NUCPUC[nX] = this.RSTRING("1234567890", 1);
+        this.pcClF += CNP[nX][0]; this.pcNuC += CNP[nX][1]; this.pcPuC += CNP[nX][2];
+      }
+      this.NUCPUC[11] = this.RSTRING("1234567890", 1).repeat(11);
+      return;
+    }
+    const nP = Math.abs(nNP);
+    let cX = "";
+    for (let nX = 1; nX <= 10; nX++) cX += CNP[nX].slice(-nP);
+    cX = nNP > 0 ? this.RSTRING(cX, nP) : this.RASORT(cX, nP);
+    this.pcClF = this.pcNuC = this.pcPuC = "";
+    for (let nX = 1; nX <= 10; nX++) {
+      CNP[nX] = CNP[nX].slice(0, nP === 1 ? 2 : 1) + cX.slice(0, nP);
+      cX = cX.slice(nP);
+      this.pcClF += CNP[nX][0]; this.pcNuC += CNP[nX][1]; this.pcPuC += CNP[nX].slice(-1);
+    }
+  }
+  RSTRING(cPre, nP) {
+    let cPost = "";
+    const n = cPre.length;
+    for (let k = 0; k < n; k += nP) {
+      const nAT = Math.trunc(this.rand() * cPre.length / nP) * nP + 1;
+      cPost += cPre.substr(nAT - 1, nP);
+      cPre = STUFF(cPre, nAT, nP, "");
+    }
+    return cPost;
+  }
+  RASORT(cPre, nP) {
+    let RAS = [];
+    for (let i = 0; i < 10; i++) RAS.push(cPre.substr(i * nP, nP));
+    if (nP === 2) RAS.sort();
+    else { RAS = []; for (let nX = 1; nX <= 10; nX++) RAS.push(this.CNP[nX][1]); }
+    return RAS.join("");
+  }
+
+  // -- Click events ----------------------------------------------------------------------------
+  async CBU_Click(ctl) {
+    this.busy++;
+    try {
+      if (!ctl.Enabled) return;
+      const cCap = ctl.Caption;
+      this.plRun = false;
+      if (cCap.includes("CFs")) {
+        ctl.Caption = cCap.includes("not") ? cCap.replace("not ", "") : cCap.replace("scrambled", "not scrambled");
+        this.SCRAMBLE(ctl.Caption.includes("not") ? -2 : 2);
+        this.g.Cls();
+        await this.DORUN(1, this.pnGroupSize);
+      } else if (cCap.includes("hand")) {
+        const cT = cCap.slice(0, AT("to", cCap) + 2);
+        ctl.Caption = cCap.includes("many") ? cT + "one" : cT + "many";
+        this.pnGroupSize = 10;
+        if (ctl.Caption.includes("many") && !this.CBU3.Caption.includes("10")) await this.CBU_Click(this.CBU3);   // set group size to 10
+        this.plClustered = ctl.Caption.includes("many") && !this.plClustered;
+        this.SPLB5.Enabled = this.plClustered;
+        this.SP5.Enabled = this.plClustered;
+      } else if (cCap.includes("size")) {
+        const cT = cCap.slice(0, AT("1", cCap));
+        ctl.Caption = cCap.includes("10") ? cT : cT + "0";
+        const ten = ctl.Caption.includes("10");
+        this.pnGroupSize = ten ? 10 : 1;
+        this.SP1.Value = ten ? 5.0 : .5;   // LTP threshold
+        this.SP2.Value = ten ? 1.0 : .5;   // LTP step
+        this.SP3.Value = 1.1;              // LTD threshold
+        this.SP4.Value = .1;               // LTD step
+        if (!ten && this.CBU2.Caption.includes("many")) await this.CBU_Click(this.CBU2);
+        this.SPLB3.Enabled = ten; this.SP3.Enabled = ten;
+        this.SPLB4.Enabled = ten; this.SP4.Enabled = ten;
+      } else if (cCap.includes("PuC")) {
+        ctl.Caption = cCap.includes("not") ? cCap.replace("not ", "") : cCap.replace("scrambled", "not scrambled");
+        this.SCRAMBLE(ctl.Caption.includes("not") ? -1 : 1);
+        this.g.Cls();
+        await this.DORUN(1, this.pnGroupSize);
+      }
+      this.CBU5.SetFocus();
+    } finally { this.busy--; }
+  }
+  CBLU_Click(ctl) {
+    if (ctl.Name === "CBLU1") ctl.Caption = ctl.Caption === "Red" ? "No red" : "Red";
+    else ctl.Caption = ctl.Caption === "Fast" ? "Slow" : "Fast";
+    ctl._flush();
+  }
+  CBLD_Click(ctl) {
+    // (Unlike VFP) clicking a red interrupt button again switches it off.
+    const on = !ctl.Caption.includes("Clear") && ctl.ForeColor !== pnRood;
+    this.SetAll("ForeColor", pnZwart, "CBLD");
+    if (on) ctl.ForeColor = pnRood;
+    if (this.onInterrupt) this.onInterrupt(on ? ctl.Name : null);   // remembered across demos
+  }
+  async CBD_MouseDown(ctl) {
+    if (ctl === this.CBD2 && this.pausing) { this.keys++; return; }   // click on the pause message = continue
+    this.busy++;
+    try {
+      if (!ctl.Enabled) return;
+      this.commitSpinners();
+      this.plRun = this.plAbort = false;
+      this.SetAll("ForeColor", pnZwart, "CBD");
+      const cCap = ctl.Caption;
+      if (cCap === "Run" && !this.running) {
+        this.CBD2.Caption = "";
+        ctl.ForeColor = pnGeel;
+        await this.CBU_Click(this.CBU1); await this.CBU_Click(this.CBU1);
+        await this.CBU_Click(this.CBU4); await this.CBU_Click(this.CBU4);
+        this.plRun = true;
+        this.g.Cls();
+        await this.DORUN(this.pnGroupSize, this.pnGroupSize);
+      } else if (cCap === "Abort") {
+        this.CBD2.Caption = "Execution aborted";
+        this.plAbort = true;
+      }
+    } finally { this.busy--; }
+  }
+  CBR_Click(ctl) {
+    const nPos = parseInt(ctl.Name.slice(3), 10);
+    const nPuCID = VAL(this.pcPuC[nPos - 1]) + 1;
+    let cX = "";
+    for (let nY = 1; nY <= 10; nY++) cX += "br " + STR(nY, 2) + " = " + STR(this.SSP[nPos][nY] + this.SSD[nPos][nY], 5, 2) + pcLF;
+    this.SS.Caption = pcLF + "PuC " + nPuCID + " SSs" + pcLF + cX;
+  }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Demo panel (one button per pcCMD demo, as with 'DO nucpuc WITH .T.,"n"') + playback speed
+// Figures and page numbers according to the Zenodo version of the article (doi:10.5281/zenodo.17575573):
+// page number = the number printed at the bottom of the page.
+// ---------------------------------------------------------------------------------------------
+const DEMOS = [
+  ["1", "Demo 1\nInitial network\nFig. 1A  -  p. 4",
+   "Draws the unscrambled network: CFs (yellow), NuCs (green), PuC axons (blue), all PuC terminals fanning out to all NuCs.\nArticle: Fig. 1A, page 4."],
+  ["2", "Demo 2\nPuC axons scrambled\n(no figure)",
+   "Same network, with the PuC axon tract scrambled.\nNo corresponding figure in the article."],
+  ["3", "Demo 3\nCFs + PuC axons scrambled\nFig. 2A  -  p. 5",
+   "Both the CF tract (with its collaterals) and the PuC axon tract scrambled.\nArticle: Fig. 2A, page 5."],
+  ["4", "Demo 4\nOne CF activated\nFig. 3  -  p. 5",
+   "One CF fires: the activated circuit is shown in red, and the run stops after this single PuC.\nArticle: Fig. 3, page 5."],
+  ["5", "Demo 5\nPartner formation, size 1\nFig. 4  -  p. 7",
+   "Single CFs fire one at a time (no interference): the PuC-NuC partner connections thicken by LTP.\nArticle: Fig. 4, page 7."],
+  ["6", "Demo 6\nGroup size 10: LTP + LTD\nFig. 5  -  p. 9",
+   "Groups of 10 CFs fire in synchrony; the group size decrements as LTP grows, and LTD prunes the false partnerships.\nArticle: Fig. 5, page 9."],
+  ["7", "Demo 7\nCF hand over one to many\nFig. 6  -  p. 10",
+   "Juvenile multi-innervation: each CF starts by activating ten PuCs, and the number of PuCs under its control dwindles to one.\nArticle: Fig. 6, page 10."],
+  ["8", "Demo 8\nFull program, all controls\n(no figure)",
+   "Shows the network with all controls visible (in demo pacing).\nNo corresponding figure in the article."],
+  ["9", "Demo 9\nFailing run, LTP step 0,5\nFig. 7  -  p. 11",
+   "One to many with LTP step 0,5 and repeating factor 1: LTP is too weak against LTD and the run fails after 100000 steps (the first example of Fig. 7).\nArticle: Fig. 7, page 11."],
+  ["", "Normal mode\n(restart)",
+   "Restarts the program in its normal interactive mode (not called with a demo parameter)."],
+];
+const SPEEDS = [0.25, 0.5, 0.75, 1, 1.5, 2];
+
+class Shell {
+  constructor(stage, seed, speed) {
+    this.stage = stage; this.seed = seed; this.speed = speed;
+    this.app = null; this.pending = undefined; this.current = ""; this.interrupt = null;
+  }
+  start(demo) {
+    if (this.app) this.app.stop();
+    this.stage.innerHTML = "";
+    this.current = demo;
+    this.app = new NucPuc(this.stage, { plCalled: !!demo, pcCMD: demo, seed: this.seed });
+    this.app.speed = this.speed;
+    // keep the chosen interrupt button (red) when switching to another demo
+    this.app.onInterrupt = name => { this.interrupt = name; };
+    if (this.interrupt) this.app.controls[this.interrupt].ForeColor = pnRood;
+    this.buildPanel();
+    this.updateUrl();
+    setTimeout(() => this.app.activate(), 50);
+  }
+  updateUrl() {
+    const p = new URLSearchParams(location.search);
+    if (this.current) p.set("demo", this.current); else p.delete("demo");
+    if (this.speed !== 1) p.set("speed", String(this.speed)); else p.delete("speed");
+    const q = p.toString();
+    try { history.replaceState(null, "", location.pathname + (q ? "?" + q : "")); } catch (e) { /* file:// */ }
+  }
+  el(tag, cls, l, t, w, h, text, tip) {
+    const e = document.createElement(tag);
+    e.className = "ctl " + cls;
+    Object.assign(e.style, { left: l + "px", top: t + "px", width: w + "px", height: h + "px" });
+    if (text !== undefined) e.textContent = text;
+    if (tip) e.title = tip;
+    this.stage.appendChild(e);
+    return e;
+  }
+  buildPanel() {
+    const left = VIEW_W - DEMO_PANEL_W, n = DEMOS.length, top0 = 10, gap = 4, speedH = 52;
+    const h = Math.min(48, (FORM_H - top0 - 10 - speedH - gap * (n - 1)) / n);
+    DEMOS.forEach(([cmd, cap, tip], i) => {
+      const b = this.el("button", "panel" + (cmd === this.current ? " on" : ""), left, top0 + i * (h + gap), DEMO_PANEL_W - 10, h, cap, tip);
+      b.tabIndex = -1;
+      b.addEventListener("click", () => this.request(cmd));
+    });
+    const y0 = top0 + n * (h + gap) + 2;
+    this.el("div", "speedlbl", left, y0, DEMO_PANEL_W - 10, 14, "Speed",
+      "Playback speed of runs and demos, as with a video player.\n" +
+      "Below 1x all pauses and the computation itself are stretched; above 1x only the pauses get shorter.\n" +
+      "Can be changed while a run is executing.");
+    const bw = (DEMO_PANEL_W - 10) / 3;
+    this.speedButtons = new Map();
+    SPEEDS.forEach((sp, k) => {
+      const b = this.el("button", "panel", left + (k % 3) * bw, y0 + 15 + Math.floor(k / 3) * 18, bw - 2, 17,
+                        String(sp).replace(".", ",") + "×");
+      b.tabIndex = -1;
+      b.addEventListener("click", () => this.setSpeed(sp));
+      this.speedButtons.set(sp, b);
+    });
+    this.markSpeed();
+  }
+  setSpeed(sp) { this.speed = sp; this.app.speed = sp; this.markSpeed(); this.updateUrl(); }
+  markSpeed() { for (const [sp, b] of this.speedButtons) b.classList.toggle("on", sp === this.speed); }
+  request(demo) {
+    this.pending = demo;
+    if (this.app.busy) this.app.plAbort = true;   // let a running run/demo abort first
+    setTimeout(() => this.poll(), 20);
+  }
+  poll() {
+    if (this.pending === undefined) return;
+    if (this.app.busy) { this.app.plAbort = true; setTimeout(() => this.poll(), 50); return; }
+    const d = this.pending; this.pending = undefined;
+    this.start(d);
+  }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Start-up
+// ---------------------------------------------------------------------------------------------
+const stage = document.getElementById("stage");
+function fit() {
+  let k = Math.min(window.innerWidth / VIEW_W, window.innerHeight / FORM_H);
+  if (k > 0.96 && k < 1.04) k = 1;   // nearly actual size: do not rescale (keeps 1-pixel lines sharp)
+  stage.style.transform = "scale(" + k + ")";
+  stage.style.left = Math.max(0, (window.innerWidth - VIEW_W * k) / 2) + "px";
+  stage.style.top = Math.max(0, (window.innerHeight - FORM_H * k) / 2) + "px";
+}
+window.addEventListener("resize", fit);
+fit();
+
+const params = new URLSearchParams(location.search);
+let demo = params.get("demo") || "";
+if (!/^[1-9]$/.test(demo)) demo = "";
+let speed = parseFloat(params.get("speed") || "1");
+if (!(speed > 0)) speed = 1;
+const seedParam = params.get("seed");
+const shell = new Shell(stage, seedParam !== null && /^\d+$/.test(seedParam) ? parseInt(seedParam, 10) : null, speed);
+window.nucpuc = shell;   // for inspection in the browser console
+
+// ---------------------------------------------------------------------------------------------
+// Tooltips on touch screens: press and hold a control (about half a second) to see its explanation.
+// The control does not act after such a long press; a normal tap works as usual.
+// ---------------------------------------------------------------------------------------------
+let lastPointerType = "mouse";
+const tipBox = document.createElement("div");
+tipBox.id = "tip";
+document.body.appendChild(tipBox);
+let lpTimer = null, lpFired = false, lpStart = null, tipHide = null;
+function hideTip() { tipBox.style.display = "none"; clearTimeout(tipHide); }
+function showTip(el) {
+  tipBox.textContent = el.title;
+  tipBox.style.display = "block";
+  const r = el.getBoundingClientRect(), tw = tipBox.offsetWidth, th = tipBox.offsetHeight;
+  let x = Math.min(Math.max(4, r.left + r.width / 2 - tw / 2), window.innerWidth - tw - 4);
+  let y = r.bottom + 6;
+  if (y + th > window.innerHeight - 4) y = Math.max(4, r.top - th - 6);
+  tipBox.style.left = x + "px"; tipBox.style.top = y + "px";
+  clearTimeout(tipHide); tipHide = setTimeout(hideTip, 10000);
+}
+function cancelLongPress() { clearTimeout(lpTimer); lpTimer = null; }
+document.addEventListener("pointerdown", e => {
+  lastPointerType = e.pointerType;
+  hideTip();
+  if (e.pointerType !== "touch") return;
+  const el = e.target.closest("[title]");
+  if (!el || !el.title) return;
+  lpFired = false; lpStart = [e.clientX, e.clientY];
+  lpTimer = setTimeout(() => { lpTimer = null; lpFired = true; showTip(el); }, 500);
+}, true);
+document.addEventListener("pointermove", e => {
+  if (lpTimer && Math.hypot(e.clientX - lpStart[0], e.clientY - lpStart[1]) > 10) cancelLongPress();
+}, true);
+document.addEventListener("pointerup", cancelLongPress, true);
+document.addEventListener("pointercancel", cancelLongPress, true);
+document.addEventListener("click", e => {   // a long press is not a click
+  if (lpFired) { lpFired = false; e.stopPropagation(); e.preventDefault(); }
+}, true);
+document.addEventListener("contextmenu", e => { if (lastPointerType === "touch") e.preventDefault(); });
+
+document.addEventListener("keydown", e => {
+  if (["Shift", "Control", "Alt", "Meta"].includes(e.key)) return;
+  if (shell.app) shell.app.keys++;
+});
+shell.start(demo);
+</script>
+</body>
+</html>
