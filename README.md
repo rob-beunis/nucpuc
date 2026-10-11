@@ -39,6 +39,8 @@ Optional additions to the address:
 
 The playback speed can also be changed with the buttons below the demo panel.
 
+The page counts anonymous visits and demo starts with GoatCounter (no cookies, no personal data).
+
 Every button has an explanation (tooltip). With a mouse, rest the pointer on the button; on a tablet or phone, press and hold the button for about half a second. The program is easiest to use in landscape orientation on small screens.
 
 

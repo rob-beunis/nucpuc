@@ -3,6 +3,11 @@
 <head>
 <meta charset="utf-8">
 <meta name="google" content="notranslate">
+<!-- Privacy-friendly visitor counter (GoatCounter: no cookies, no personal data). Counting is done
+     explicitly in the script below (page opened, demo chosen, Run clicked); localhost is not counted. -->
+<script data-goatcounter="https://nucpuc.goatcounter.com/count"
+        data-goatcounter-settings='{"no_onload": true}'
+        async src="https://gc.zgo.at/count.js"></script>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>NuCPuC – Beunis (2021)</title>
 <meta name="description" content="Interactive web version of the NuCPuC simulation (R. Beunis, 2021): formation of privileged partner connections between Purkinje cells and cerebellar nuclear cells.">
@@ -464,8 +469,12 @@ class NucPuc {
       const left = this.pnHPosNuC - 42 + [0, 0, 1, 4][nX] * nW / 5;
       l.place(left, this.pnVOffSet + this.pnDist * 10 + 55, nW / 5 * (nX === 2 ? 3 : 1) + 2, 20);
       // mouse: act on press (VFP MouseDown); touch: act on tap, so that press-and-hold can show the tooltip
-      l.el.addEventListener("pointerdown", e => { if (e.pointerType !== "touch") this.CBD_MouseDown(l); });
-      l.el.addEventListener("click", () => { if (lastPointerType === "touch") this.CBD_MouseDown(l); });
+      const userPress = () => {
+        if (nX === 1 && l.Caption === "Run" && !this.running) gcCount("run", "Run clicked");
+        this.CBD_MouseDown(l);
+      };
+      l.el.addEventListener("pointerdown", e => { if (e.pointerType !== "touch") userPress(); });
+      l.el.addEventListener("click", () => { if (lastPointerType === "touch") userPress(); });
     }
 
     // CBR1..10 : '?' next to the PuC numbers
@@ -1112,7 +1121,10 @@ class Shell {
     DEMOS.forEach(([cmd, cap, tip], i) => {
       const b = this.el("button", "panel" + (cmd === this.current ? " on" : ""), left, top0 + i * (h + gap), DEMO_PANEL_W - 10, h, cap, tip);
       b.tabIndex = -1;
-      b.addEventListener("click", () => this.request(cmd));
+      b.addEventListener("click", () => {
+        gcCount(cmd ? "demo-" + cmd : "normal-mode", cmd ? "Demo " + cmd + " (panel)" : "Normal mode (panel)");
+        this.request(cmd);
+      });
     });
     const y0 = top0 + n * (h + gap) + 2;
     this.el("div", "speedlbl", left, y0, DEMO_PANEL_W - 10, 14, "Speed",
@@ -1173,6 +1185,17 @@ window.nucpuc = shell;   // for inspection in the browser console
 // The control does not act after such a long press; a normal tap works as usual.
 // ---------------------------------------------------------------------------------------------
 let lastPointerType = "mouse";
+
+// GoatCounter: count a page view or an event; waits briefly for the (async) counter script.
+// Blocked or unavailable counters (ad blockers, offline, localhost) are silently ignored.
+function gcCount(path, title, event = true, tries = 0) {
+  const gc = window.goatcounter;
+  if (gc && typeof gc.count === "function") {
+    try { gc.count({ path: path, title: title, event: event }); } catch (e) { /* ignore */ }
+  } else if (tries < 20) {
+    setTimeout(() => gcCount(path, title, event, tries + 1), 500);
+  }
+}
 const tipBox = document.createElement("div");
 tipBox.id = "tip";
 document.body.appendChild(tipBox);
@@ -1213,6 +1236,8 @@ document.addEventListener("keydown", e => {
   if (shell.app) shell.app.keys++;
 });
 shell.start(demo);
+// count the page opening once, with the demo link that was used (e.g. from the article)
+gcCount(location.pathname + (demo ? "?demo=" + demo : ""), "NuCPuC" + (demo ? " - demo " + demo : ""), false);
 </script>
 </body>
 </html>
